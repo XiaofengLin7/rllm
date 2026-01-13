@@ -410,6 +410,8 @@ class AgentExecutionEngine:
                 step.reward = 0.0
         compute_trajectory_reward(trajectory)
         compute_mc_return(trajectory, gamma=self.gamma)
+        if termination_reason == "TRUNCATION":
+            colorful_print(f"Trajectory {idx} is truncated. Trajectory reward is {trajectory.reward}. \n", "red")
 
         if mode == "Text":
             return trajectory
