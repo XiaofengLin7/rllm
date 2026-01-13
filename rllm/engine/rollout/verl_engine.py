@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 import uuid
 
 from verl.experimental.agent_loop.agent_loop import AgentLoopManager, AsyncLLMServerManager
@@ -7,6 +9,11 @@ from verl.workers.rollout.replica import TokenOutput
 from rllm.engine.rollout.rollout_engine import ModelOutput, RolloutEngine
 from rllm.parser import ChatTemplateParser
 from rllm.workflows import TerminationEvent, TerminationReason
+
+logger = logging.getLogger(__name__)
+
+# Enable debug logging for token accumulation via environment variable
+_DEBUG_TOKEN_ACCUMULATION = os.environ.get("DEBUG_TOKEN_ACCUMULATION", "").lower() in ("1", "true")
 
 
 class VerlEngine(RolloutEngine):
@@ -54,24 +61,57 @@ class VerlEngine(RolloutEngine):
         tools = kwargs.pop("tools", [])
         accumulate_reasoning = kwargs.pop("accumulate_reasoning", self.accumulate_reasoning)
 
+        # verl-style token accumulation: if accumulated_prompt_ids is provided,
+        # use it directly instead of re-tokenizing messages
+        accumulated_prompt_ids: list[int] | None = kwargs.pop("accumulated_prompt_ids", None)
+
         sampling_params = self.val_sampling_params.copy() if self.validate or validate else self.train_sampling_params.copy()
         sampling_params.update(kwargs)
 
         max_tokens = sampling_params.pop("max_tokens", sampling_params.pop("max_new_tokens", self.max_response_length))
 
-        prompt = self.chat_parser.parse(messages, add_generation_prompt=True, is_first_msg=True, tools=tools, accumulate_reasoning=accumulate_reasoning)
-        request_prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)  # list[int]
-
-        if any(msg.get("images", None) is not None and msg["role"] == "user" for msg in messages) and self.processor is not None:
-            image_data = self.chat_parser.process_image_data(messages)  # list[PIL.Image.Image]
-            model_inputs = self.processor(text=[prompt], images=image_data)
-            prompt_ids = model_inputs.pop("input_ids")[0]  # list[int]
-            model_inputs.pop("attention_mask")
-            multi_modal_inputs = dict(model_inputs)
-        else:
+        # Determine prompt_ids: use accumulated if provided, otherwise tokenize from messages
+        if accumulated_prompt_ids is not None:
+            # Use the accumulated token sequence directly (verl-style)
+            prompt_ids = list(accumulated_prompt_ids)
+            request_prompt_ids = prompt_ids
             image_data = None
             multi_modal_inputs = None
-            prompt_ids = request_prompt_ids
+            
+            if _DEBUG_TOKEN_ACCUMULATION:
+                # Compare with what full re-tokenization would produce
+                full_prompt = self.chat_parser.parse(messages, add_generation_prompt=True, is_first_msg=True, tools=tools, accumulate_reasoning=accumulate_reasoning)
+                full_retokenized = self.tokenizer.encode(full_prompt, add_special_tokens=False)
+                match = "✓" if prompt_ids == full_retokenized else "✗"
+                print(
+                    f"[TokenAccumulation] Using accumulated IDs {match}: "
+                    f"accumulated_len={len(prompt_ids)}, retokenized_len={len(full_retokenized)}",
+                    flush=True
+                )
+                if prompt_ids != full_retokenized:
+                    # Find first diff
+                    for i, (a, b) in enumerate(zip(prompt_ids, full_retokenized)):
+                        if a != b:
+                            print(f"[TokenAccumulation] First diff at {i}: {a} vs {b}", flush=True)
+                            break
+        else:
+            # First turn or no accumulation - tokenize everything
+            prompt = self.chat_parser.parse(messages, add_generation_prompt=True, is_first_msg=True, tools=tools, accumulate_reasoning=accumulate_reasoning)
+            request_prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+
+            if any(msg.get("images", None) is not None and msg["role"] == "user" for msg in messages) and self.processor is not None:
+                image_data = self.chat_parser.process_image_data(messages)
+                model_inputs = self.processor(text=[prompt], images=image_data)
+                prompt_ids = model_inputs.pop("input_ids")[0]
+                model_inputs.pop("attention_mask")
+                multi_modal_inputs = dict(model_inputs)
+            else:
+                image_data = None
+                multi_modal_inputs = None
+                prompt_ids = request_prompt_ids
+            
+            if _DEBUG_TOKEN_ACCUMULATION:
+                print(f"[TokenAccumulation] First turn: prompt_len={len(prompt_ids)}", flush=True)
 
         prompt_length = len(prompt_ids)
         if enforce_max_prompt_length and prompt_length > self.max_prompt_length:

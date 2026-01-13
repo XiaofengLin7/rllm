@@ -197,6 +197,10 @@ class AgentExecutionEngine:
 
         # for step return
         episode_steps = []
+        
+        # verl-style token accumulation to avoid re-tokenization mismatch
+        # This tracks the accumulated token sequence across turns
+        accumulated_prompt_ids: list[int] | None = None
 
         # Reset environment with the task using the executor
         loop = asyncio.get_event_loop()
@@ -238,6 +242,10 @@ class AgentExecutionEngine:
                     break
 
             kwargs["max_tokens"] = max_tokens
+            
+            # Pass accumulated_prompt_ids if available (verl-style token accumulation)
+            if accumulated_prompt_ids is not None:
+                kwargs["accumulated_prompt_ids"] = accumulated_prompt_ids
 
             start_time = time.time()
             model_output = await self.get_model_response(prompt_messages, application_id, **kwargs)
@@ -245,6 +253,12 @@ class AgentExecutionEngine:
             delta_time = time.time() - start_time
             llm_time += delta_time
             total_time += delta_time
+            
+            # Update accumulated token sequence: prompt_ids + completion_ids
+            # This is the key fix for token mismatch - we accumulate raw token IDs
+            # instead of re-tokenizing the full history each turn
+            accumulated_prompt_ids = list(model_output.prompt_ids) + list(model_output.completion_ids)
+            
             # Update steps
             prompt_response_pair = {
                 "prompt": self.chat_parser.parse(prompt_messages, add_generation_prompt=True, is_first_msg=True),
@@ -352,6 +366,12 @@ class AgentExecutionEngine:
 
             response_tokens.extend(env_msg_tokens)
             response_masks.extend(env_msg_masks)
+            
+            # Append env message tokens to accumulated sequence for next turn
+            # IMPORTANT: Use the SAME tokens (env_msg_tokens) that are added to response_tokens
+            # to ensure token-in = token-out consistency for training
+            if accumulated_prompt_ids is not None and env_msg_tokens:
+                accumulated_prompt_ids.extend(env_msg_tokens)
 
             if step_idx == self.max_steps - 1:
                 termination_reason = "MAX_STEPS"
