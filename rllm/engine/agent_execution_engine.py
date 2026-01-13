@@ -405,6 +405,9 @@ class AgentExecutionEngine:
 
         trajectory: Trajectory = agent.trajectory
         # Aggregate final trajectory statistics
+        if termination_reason == "TRUNCATION": 
+            for step in trajectory.steps:
+                step.reward = 0.0
         compute_trajectory_reward(trajectory)
         compute_mc_return(trajectory, gamma=self.gamma)
 
