@@ -257,7 +257,10 @@ class AgentExecutionEngine:
             # Update accumulated token sequence: prompt_ids + completion_ids
             # This is the key fix for token mismatch - we accumulate raw token IDs
             # instead of re-tokenizing the full history each turn
-            accumulated_prompt_ids = list(model_output.prompt_ids) + list(model_output.completion_ids)
+            if mode=="Token":
+                accumulated_prompt_ids = list(model_output.prompt_ids) + list(model_output.completion_ids)
+            else:
+                accumulated_prompt_ids = None
             
             # Update steps
             prompt_response_pair = {
@@ -370,7 +373,7 @@ class AgentExecutionEngine:
             # Append env message tokens to accumulated sequence for next turn
             # IMPORTANT: Use the SAME tokens (env_msg_tokens) that are added to response_tokens
             # to ensure token-in = token-out consistency for training
-            if accumulated_prompt_ids is not None and env_msg_tokens:
+            if mode=="Token" and accumulated_prompt_ids is not None and env_msg_tokens:
                 accumulated_prompt_ids.extend(env_msg_tokens)
 
             if step_idx == self.max_steps - 1:
@@ -405,12 +408,13 @@ class AgentExecutionEngine:
 
         trajectory: Trajectory = agent.trajectory
         # Aggregate final trajectory statistics
-        if termination_reason == "TRUNCATION": 
+        # Set all step rewards to 0 for truncated trajectories
+        if termination_reason == "TRUNCATION" or termination_reason == "PROMPT_TRUNCATION": 
             for step in trajectory.steps:
                 step.reward = 0.0
         compute_trajectory_reward(trajectory)
         compute_mc_return(trajectory, gamma=self.gamma)
-        if termination_reason == "TRUNCATION":
+        if termination_reason == "TRUNCATION" or termination_reason == "PROMPT_TRUNCATION":
             colorful_print(f"Trajectory {idx} is truncated. Trajectory reward is {trajectory.reward}. \n", "red")
 
         if mode == "Text":
