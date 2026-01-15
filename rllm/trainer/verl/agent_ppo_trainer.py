@@ -619,8 +619,9 @@ class AgentPPOTrainer(RayPPOTrainer):
             chat_completions.append(traj["chat_completions"])
             traj_metrics.append(traj["metrics"])
 
-        # Flatten traj_metrics into a dict of lists
-        traj_metrics = {k: [d[k] for d in traj_metrics] for k in traj_metrics[0]}
+        # Flatten traj_metrics into a dict of lists (handle different keys across trajectories)
+        all_keys = set().union(*(d.keys() for d in traj_metrics)) if traj_metrics else set()
+        traj_metrics = {k: [d.get(k) for d in traj_metrics] for k in all_keys}
         # Aggregate metrics (mean, min, max)
         for k, v_list in traj_metrics.items():
             v_list = [v for v in v_list if v is not None and v >= 0]
