@@ -244,7 +244,7 @@ class AgentExecutionEngine:
             kwargs["max_tokens"] = max_tokens
             
             # Pass accumulated_prompt_ids if available (verl-style token accumulation)
-            if accumulated_prompt_ids is not None:
+            if accumulated_prompt_ids is not None and self.engine_name == "verl":
                 kwargs["accumulated_prompt_ids"] = accumulated_prompt_ids
 
             start_time = time.time()
