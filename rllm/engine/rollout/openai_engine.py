@@ -87,6 +87,15 @@ class OpenAIEngine(RolloutEngine):
         sampling_params.update(kwargs)
 
         create_params = self._prepare_max_tokens_param(sampling_params)
+        # if sampling_params has max_completion_tokens and max_tokens, pop max_tokens and set max_completion_tokens to max_tokens
+        if "max_completion_tokens" in create_params and "max_tokens" in sampling_params:
+            max_tokens = sampling_params.pop("max_tokens")
+            sampling_params["max_completion_tokens"] = max_tokens
+            create_params.pop("max_completion_tokens", None)
+        if self.model == "gpt-5.2":
+            # gpt-5.2 does not support temperature and top_p
+            sampling_params.pop("temperature", None)
+            sampling_params.pop("top_p", None)
         converted_messages = self._convert_messages_to_openai_format(messages)
 
         retries = self.api_retries

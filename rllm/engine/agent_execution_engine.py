@@ -102,7 +102,7 @@ class AgentExecutionEngine:
             self.rollout_engine = OpenAIEngine(
                 **rollout_engine_args,
                 api_retries=api_retries,
-                tokenizer=self.tokenizer,
+                # tokenizer=self.tokenizer,
                 max_prompt_length=self.max_prompt_length,
                 max_response_length=self.max_response_length,
                 disable_thinking=self.disable_thinking,
