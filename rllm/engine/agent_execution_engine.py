@@ -206,6 +206,7 @@ class AgentExecutionEngine:
         loop = asyncio.get_event_loop()
         observation, info = await loop.run_in_executor(self.executor, env.reset)
         info["max_steps"] = self.max_steps
+        current_episode_index = int(info.get("episode_index", 0))
 
         # Reset agent
         agent.reset()
@@ -227,6 +228,7 @@ class AgentExecutionEngine:
         for step_idx in range(self.max_steps):
             # Get action from agent
             prompt_messages = agent.chat_completions.copy()
+            step_episode_index = current_episode_index
             # Max remaining tokens left for the response
             # For enforced max prompt at each step, no need to deduct here
             if not self.enforce_max_prompt_length:
@@ -269,6 +271,7 @@ class AgentExecutionEngine:
                 "prompt_ids": model_output.prompt_ids,
                 "completion_ids": model_output.completion_ids,
                 "logprobs": model_output.logprobs,
+                "episode_index": step_episode_index,
             }
             episode_steps.append(prompt_response_pair)
 
@@ -310,6 +313,7 @@ class AgentExecutionEngine:
             cur_step.reward = reward
             cur_step.done = done
             cur_step.info.update(info)
+            current_episode_index = int(info.get("episode_index", current_episode_index))
 
             chat_completions_messages = agent.chat_completions
             assistant_message, env_messages = get_recent_assistant_user_messages(chat_completions_messages)
@@ -420,14 +424,22 @@ class AgentExecutionEngine:
         if mode == "Text":
             return trajectory
         elif mode == "Token":
-            prompt_tokens, response_tokens, response_masks, is_valid_trajectory = self.assemble_steps(episode_steps)
+            (
+                prompt_tokens,
+                response_tokens,
+                response_masks,
+                first_attempt_response_mask,
+                is_valid_trajectory,
+            ) = self.assemble_steps(episode_steps)
             token_result = {
                 "prompt_tokens": prompt_tokens,
                 "response_tokens": response_tokens,
                 "response_masks": response_masks,
+                "first_attempt_response_mask": first_attempt_response_mask,
                 "trajectory_reward": trajectory.reward,
                 "idx": env.idx,
                 "chat_completions": agent.chat_completions,
+                "step_records": episode_steps,
                 "metrics": {
                     # Total number of steps taken in the trajectory
                     "steps": len(trajectory.steps),
@@ -475,6 +487,7 @@ class AgentExecutionEngine:
         accumulated_sequence = initial_prompt_ids.copy()
         response_tokens = []
         response_masks = []
+        first_attempt_response_mask = []
         is_valid_trajectory = True
 
         for i, step in enumerate(steps):
@@ -485,6 +498,7 @@ class AgentExecutionEngine:
                 # First step: just add completion
                 response_tokens.extend(current_completion_ids)
                 response_masks.extend([1] * len(current_completion_ids))  # completion contributes to loss
+                first_attempt_response_mask.extend([1 if int(step.get("episode_index", 0)) == 0 else 0] * len(current_completion_ids))
                 accumulated_sequence.extend(current_completion_ids)
             else:
                 if current_prompt_ids[: len(accumulated_sequence)] != accumulated_sequence:
@@ -506,18 +520,29 @@ class AgentExecutionEngine:
 
                 response_tokens.extend(current_prompt_ids[len(accumulated_sequence) :] + current_completion_ids)
                 response_masks.extend([0] * (len(current_prompt_ids) - len(accumulated_sequence)) + [1] * len(current_completion_ids))  # completion contributes to loss
+                first_attempt_response_mask.extend([0] * (len(current_prompt_ids) - len(accumulated_sequence)))
+                first_attempt_response_mask.extend([1 if int(step.get("episode_index", 0)) == 0 else 0] * len(current_completion_ids))
                 accumulated_sequence = current_prompt_ids + current_completion_ids
 
         assert len(response_masks) == len(response_tokens)
+        assert len(first_attempt_response_mask) == len(response_tokens)
 
         prompt_tokens = torch.tensor(initial_prompt_ids, dtype=torch.long)
         response_tokens = torch.tensor(response_tokens, dtype=torch.long)
         response_masks = torch.tensor(response_masks, dtype=torch.long)
+        first_attempt_response_mask = torch.tensor(first_attempt_response_mask, dtype=torch.long)
 
         if self.config.rllm.filter_token_mismatch:
             response_masks = response_masks * int(is_valid_trajectory)
+            first_attempt_response_mask = first_attempt_response_mask * int(is_valid_trajectory)
 
-        return prompt_tokens, response_tokens, response_masks, is_valid_trajectory
+        return (
+            prompt_tokens,
+            response_tokens,
+            response_masks,
+            first_attempt_response_mask,
+            is_valid_trajectory,
+        )
 
     async def run_agent_trajectory_with_retry(self, idx, seed=0, mode="Text", **kwargs):
         for _ in range(self.retry_limit):
