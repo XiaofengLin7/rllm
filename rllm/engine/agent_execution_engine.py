@@ -23,6 +23,64 @@ from rllm.utils import colorful_print
 logger = logging.getLogger(__name__)
 
 
+def _compute_boundary_env_token_lengths(info, env_messages, tokenizer, parser):
+    """Compute boundary env-token lengths from transition metadata and env messages.
+
+    Returns:
+        tuple[bool, int, int]:
+            - boundary_transition flag
+            - terminal env token length
+            - next-initial env token length
+        If boundary metadata is malformed/mismatched, lengths are set to -1.
+    """
+    boundary_transition = bool(info.get("boundary_transition", False))
+    if not boundary_transition:
+        return False, 0, 0
+
+    terminal_obs = info.get("boundary_terminal_observation", "")
+    next_initial_obs = info.get("boundary_next_initial_observation", "")
+    if not isinstance(terminal_obs, str) or not isinstance(next_initial_obs, str):
+        return True, -1, -1
+
+    expected_messages = []
+    if terminal_obs:
+        expected_messages.append(terminal_obs)
+    if next_initial_obs:
+        expected_messages.append(next_initial_obs)
+    if not expected_messages:
+        return True, -1, -1
+
+    if len(env_messages) < len(expected_messages):
+        return True, -1, -1
+
+    suffix_messages = env_messages[-len(expected_messages) :]
+    for idx, msg in enumerate(suffix_messages):
+        if msg.get("role") not in {"user", "tool"}:
+            return True, -1, -1
+        if msg.get("content", "") != expected_messages[idx]:
+            return True, -1, -1
+
+    msg_token_lens = []
+    for idx, msg in enumerate(suffix_messages):
+        msg_tokens, _ = convert_messages_to_tokens_and_masks(
+            [msg],
+            tokenizer=tokenizer,
+            parser=parser,
+            contains_first_msg=False,
+            contains_generation_msg=(idx == len(suffix_messages) - 1),
+        )
+        msg_token_lens.append(len(msg_tokens))
+
+    if terminal_obs:
+        terminal_len = msg_token_lens[0]
+        next_initial_len = msg_token_lens[1] if next_initial_obs else 0
+    else:
+        terminal_len = 0
+        next_initial_len = msg_token_lens[0]
+
+    return True, terminal_len, next_initial_len
+
+
 class AgentExecutionEngine:
     def __init__(
         self,
@@ -272,6 +330,9 @@ class AgentExecutionEngine:
                 "completion_ids": model_output.completion_ids,
                 "logprobs": model_output.logprobs,
                 "episode_index": step_episode_index,
+                "boundary_transition": False,
+                "boundary_terminal_env_token_len": 0,
+                "boundary_next_initial_env_token_len": 0,
             }
             episode_steps.append(prompt_response_pair)
 
@@ -327,6 +388,17 @@ class AgentExecutionEngine:
                 assistant_msg_tokens, assistant_msg_masks = convert_messages_to_tokens_and_masks([assistant_message], tokenizer=self.tokenizer, parser=self.chat_parser, contains_first_msg=False, contains_generation_msg=False)
             if env_messages:
                 env_msg_tokens, env_msg_masks = convert_messages_to_tokens_and_masks(env_messages, tokenizer=self.tokenizer, parser=self.chat_parser, contains_first_msg=False, contains_generation_msg=True)
+
+            if mode == "Token":
+                boundary_transition, terminal_env_len, next_initial_env_len = _compute_boundary_env_token_lengths(
+                    info=info,
+                    env_messages=env_messages or [],
+                    tokenizer=self.tokenizer,
+                    parser=self.chat_parser,
+                )
+                prompt_response_pair["boundary_transition"] = boundary_transition
+                prompt_response_pair["boundary_terminal_env_token_len"] = terminal_env_len
+                prompt_response_pair["boundary_next_initial_env_token_len"] = next_initial_env_len
 
             # Update repsonse token length
             response_token_len += len(assistant_msg_tokens) + len(env_msg_tokens)
