@@ -333,6 +333,12 @@ class AgentExecutionEngine:
                 "boundary_transition": False,
                 "boundary_terminal_env_token_len": 0,
                 "boundary_next_initial_env_token_len": 0,
+                # Distillation hindsight builders rely on explicit terminal flags.
+                # Keep defaults false and fill from env info after env.step.
+                "episode_done": False,
+                "inner_done": False,
+                "outer_done": False,
+                "episode_success": False,
             }
             episode_steps.append(prompt_response_pair)
 
@@ -399,6 +405,12 @@ class AgentExecutionEngine:
                 prompt_response_pair["boundary_transition"] = boundary_transition
                 prompt_response_pair["boundary_terminal_env_token_len"] = terminal_env_len
                 prompt_response_pair["boundary_next_initial_env_token_len"] = next_initial_env_len
+                prompt_response_pair["episode_done"] = bool(info.get("episode_done", done))
+                prompt_response_pair["inner_done"] = bool(info.get("inner_done", done))
+                prompt_response_pair["outer_done"] = bool(info.get("outer_done", done))
+                prompt_response_pair["episode_success"] = bool(
+                    info.get("episode_success", info.get("success", False))
+                )
 
             # Update repsonse token length
             response_token_len += len(assistant_msg_tokens) + len(env_msg_tokens)
