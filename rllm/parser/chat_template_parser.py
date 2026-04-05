@@ -103,6 +103,9 @@ class ChatTemplateParser:
             elif "qwen" in model_name or "r2e" in model_name or "deepswe" in model_name or "qwen" in tokenizer_cls:
                 logger.info(f"Using QwenChatTemplateParser for {tokenizer.name_or_path}")
                 return QwenChatTemplateParser(tokenizer, processor=processor, disable_thinking=disable_thinking)
+            elif "glm" in model_name:
+                logger.info(f"Using GLM4ChatTemplateParser for {tokenizer.name_or_path}")
+                return GLM4ChatTemplateParser(tokenizer)
             elif "llama" in model_name:
                 logger.info(f"Using LlamaChatTemplateParser for {tokenizer.name_or_path}")
                 return LlamaChatTemplateParser(tokenizer)
@@ -734,6 +737,73 @@ class HarmonyChatTemplateParser(ChatTemplateParser):
         return {
             "content": final,
             "reasoning": analysis,
+            "tool_calls": [],
+        }
+
+
+class GLM4ChatTemplateParser(ChatTemplateParser):
+    """Chat template parser for THUDM GLM-4 models (e.g., GLM-4-9B-0414).
+
+    GLM-4 uses [gMASK]<sop> as BOS, role tokens <|system|>/<|user|>/<|assistant|>/<|observation|>
+    as delimiters, and no explicit end-of-turn token between messages.
+    """
+
+    def __init__(self, tokenizer):
+        super().__init__(tokenizer)
+        self.bos_token = "[gMASK]<sop>"
+        self.system_token = "<|system|>\n"
+        self.user_token = "<|user|>\n"
+        self.assistant_token = "<|assistant|>\n"
+        self.observation_token = "<|observation|>\n"
+        self.generation_prompt = "<|assistant|>"
+
+    def parse(self, messages, add_generation_prompt=False, is_first_msg=False, **kwargs) -> str:
+        result = ""
+
+        if is_first_msg:
+            result += self.bos_token
+
+        for message in messages:
+            if message["role"] == "system":
+                result += self.parse_system(message)
+            elif message["role"] == "user":
+                result += self.parse_user(message)
+            elif message["role"] == "assistant":
+                result += self.parse_assistant(message)
+            elif message["role"] == "tool":
+                result += self.parse_tool(message)
+            else:
+                raise NotImplementedError(f"Unsupported message role: {message['role']}")
+
+        if add_generation_prompt:
+            result += self.generation_prompt
+        return result
+
+    def parse_system(self, message):
+        return "<|system|>\n" + message["content"]
+
+    def parse_user(self, message):
+        return "<|user|>\n" + message["content"]
+
+    def parse_assistant(self, message):
+        return "<|assistant|>\n" + (message.get("content") or "")
+
+    def parse_tool(self, message):
+        return "<|observation|>\n" + message["content"]
+
+    def parse_completion(self, completion_ids):
+        completion_text = self.tokenizer.decode(completion_ids, skip_special_tokens=False)
+
+        # Strip end tokens if present
+        for end_tok in ("<|user|>", "<|endoftext|>", "<|observation|>"):
+            if completion_text.endswith(end_tok):
+                completion_text = completion_text[: -len(end_tok)]
+
+        content = completion_text.strip()
+
+        return {
+            "content": content,
+            "reasoning": "",
             "tool_calls": [],
         }
 

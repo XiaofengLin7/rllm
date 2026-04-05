@@ -1,9 +1,10 @@
-from rllm.parser.chat_template_parser import ChatTemplateParser, DeepseekQwenChatTemplateParser, LlamaChatTemplateParser, QwenChatTemplateParser
+from rllm.parser.chat_template_parser import ChatTemplateParser, DeepseekQwenChatTemplateParser, GLM4ChatTemplateParser, LlamaChatTemplateParser, QwenChatTemplateParser
 from rllm.parser.tool_parser import QwenToolParser, R1ToolParser, ToolParser
 
 __all__ = [
     "ChatTemplateParser",
     "DeepseekQwenChatTemplateParser",
+    "GLM4ChatTemplateParser",
     "QwenChatTemplateParser",
     "LlamaChatTemplateParser",
     "ToolParser",
