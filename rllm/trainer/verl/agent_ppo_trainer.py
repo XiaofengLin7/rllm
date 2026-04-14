@@ -454,6 +454,12 @@ class AgentPPOTrainer(RayPPOTrainer):
                     return
 
     def _validate_agent(self):
+        # Clear any previous chat completions for this step before appending batches
+        save_dir = os.path.join(self.config.trainer.default_local_dir, "chat_completions")
+        completions_file = os.path.join(save_dir, f"{self.global_steps}.jsonl")
+        if os.path.exists(completions_file):
+            os.remove(completions_file)
+
         rewards_lst = []
         data_source_lst = []
         uid_lst = []
@@ -640,7 +646,7 @@ class AgentPPOTrainer(RayPPOTrainer):
         save_dir = os.path.join(self.config.trainer.default_local_dir, "chat_completions")
         os.makedirs(save_dir, exist_ok=True)
         # Save it into a jsonl files (self.global_steps)
-        with open(os.path.join(save_dir, f"{self.global_steps}.jsonl"), "w") as f:
+        with open(os.path.join(save_dir, f"{self.global_steps}.jsonl"), "a") as f:
             for chat_completion in chat_completions:
                 f.write(json.dumps(chat_completion) + "\n")
 
